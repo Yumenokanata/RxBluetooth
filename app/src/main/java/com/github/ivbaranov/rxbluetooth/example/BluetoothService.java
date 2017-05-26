@@ -7,15 +7,17 @@ import android.os.IBinder;
 import android.support.annotation.Nullable;
 import android.util.Log;
 import com.github.ivbaranov.rxbluetooth.RxBluetooth;
-import rx.Subscription;
-import rx.functions.Action1;
-import rx.schedulers.Schedulers;
+
+import io.reactivex.annotations.NonNull;
+import io.reactivex.disposables.Disposable;
+import io.reactivex.functions.Consumer;
+import io.reactivex.schedulers.Schedulers;
 
 public class BluetoothService extends Service {
   private static final String TAG = "BluetoothService";
 
   private RxBluetooth rxBluetooth;
-  private Subscription deviceSubscription;
+  private Disposable deviceDisposable;
 
   @Override public void onCreate() {
     super.onCreate();
@@ -31,13 +33,14 @@ public class BluetoothService extends Service {
       if (!rxBluetooth.isBluetoothEnabled()) {
         Log.d(TAG, "Bluetooth should be enabled first!");
       } else {
-        deviceSubscription = rxBluetooth.observeDevices()
+        deviceDisposable = rxBluetooth.observeDevices()
             .observeOn(Schedulers.computation())
             .subscribeOn(Schedulers.computation())
-            .subscribe(new Action1<BluetoothDevice>() {
-              @Override public void call(BluetoothDevice bluetoothDevice) {
+            .subscribe(new Consumer<BluetoothDevice>() {
+              @Override
+              public void accept(@NonNull BluetoothDevice bluetoothDevice) throws Exception {
                 Log.d(TAG,
-                    "Device found: " + bluetoothDevice.getAddress() + " - " + bluetoothDevice.getName());
+                        "Device found: " + bluetoothDevice.getAddress() + " - " + bluetoothDevice.getName());
               }
             });
         rxBluetooth.startDiscovery();
@@ -50,17 +53,16 @@ public class BluetoothService extends Service {
 
     Log.d(TAG, "BluetoothService stopped!");
     rxBluetooth.cancelDiscovery();
-    unsubscribe(deviceSubscription);
+    unsubscribe(deviceDisposable);
   }
 
   @Nullable @Override public IBinder onBind(Intent intent) {
     return null;
   }
 
-  private static void unsubscribe(Subscription subscription) {
-    if (subscription != null && !subscription.isUnsubscribed()) {
-      subscription.unsubscribe();
-      subscription = null;
+  private static void unsubscribe(Disposable disposable) {
+    if (disposable != null && !disposable.isDisposed()) {
+      disposable.dispose();
     }
   }
 }

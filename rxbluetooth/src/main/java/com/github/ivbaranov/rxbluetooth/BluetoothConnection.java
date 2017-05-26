@@ -23,8 +23,16 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.security.InvalidParameterException;
 import java.util.ArrayList;
-import rx.Observable;
-import rx.Subscriber;
+
+import io.reactivex.BackpressureStrategy;
+import io.reactivex.Flowable;
+import io.reactivex.Observable;
+import io.reactivex.ObservableEmitter;
+import io.reactivex.ObservableOnSubscribe;
+import io.reactivex.ObservableOperator;
+import io.reactivex.Observer;
+import io.reactivex.annotations.NonNull;
+import io.reactivex.disposables.Disposable;
 
 public class BluetoothConnection {
 
@@ -73,9 +81,10 @@ public class BluetoothConnection {
    */
   public Observable<Byte> observeByteStream() {
     if (mObserveInputStream == null) {
-      mObserveInputStream = Observable.create(new Observable.OnSubscribe<Byte>() {
-        @Override public void call(Subscriber<? super Byte> subscriber) {
-          while (!subscriber.isUnsubscribed()) {
+      mObserveInputStream = Observable.create(new ObservableOnSubscribe<Byte>() {
+        @Override
+        public void subscribe(@NonNull ObservableEmitter<Byte> subscriber) throws Exception {
+          while (!subscriber.isDisposed()) {
             try {
               subscriber.onNext((byte) inputStream.read());
             } catch (IOException e) {
@@ -100,7 +109,7 @@ public class BluetoothConnection {
    *
    * @return RxJava Observable with {@link String}
    */
-  public Observable<String> observeStringStream() {
+  public Flowable<String> observeStringStream() {
     return observeStringStream('\r', '\n');
   }
 
@@ -110,33 +119,21 @@ public class BluetoothConnection {
    * @param delimiter char(s) used for string delimiter
    * @return RxJava Observable with {@link String}
    */
-  public Observable<String> observeStringStream(final int... delimiter) {
-    return observeByteStream().lift(new Observable.Operator<String, Byte>() {
-      @Override public Subscriber<? super Byte> call(final Subscriber<? super String> subscriber) {
-        return new Subscriber<Byte>(subscriber) {
+  public Flowable<String> observeStringStream(final int... delimiter) {
+    return observeByteStream().lift(new ObservableOperator<String, Byte>() {
+      @Override
+      public Observer<? super Byte> apply(final @NonNull Observer<? super String> observer) throws Exception {
+        return new Observer<Byte>() {
           ArrayList<Byte> buffer = new ArrayList<>();
+          Disposable disposable;
 
-          @Override public void onCompleted() {
-            if (!buffer.isEmpty()) {
-              emit();
-            }
-
-            if (!subscriber.isUnsubscribed()) {
-              subscriber.onCompleted();
-            }
+          @Override
+          public void onSubscribe(@NonNull Disposable d) {
+            disposable = d;
           }
 
-          @Override public void onError(Throwable e) {
-            if (!buffer.isEmpty()) {
-              emit();
-            }
-
-            if (!subscriber.isUnsubscribed()) {
-              subscriber.onError(e);
-            }
-          }
-
-          @Override public void onNext(Byte b) {
+          @Override
+          public void onNext(@NonNull Byte b) {
             boolean found = false;
             for (int d : delimiter) {
               if (b == d) {
@@ -152,10 +149,31 @@ public class BluetoothConnection {
             }
           }
 
+          @Override
+          public void onError(@NonNull Throwable e) {
+            if (!buffer.isEmpty()) {
+              emit();
+            }
+
+            if (disposable != null && !disposable.isDisposed()) {
+              observer.onError(e);
+            }
+          }
+
+          @Override
+          public void onComplete() {
+            if (!buffer.isEmpty()) {
+              emit();
+            }
+
+            if(disposable != null && !disposable.isDisposed())
+              observer.onComplete();
+          }
+
           private void emit() {
             if (buffer.isEmpty()) {
-              if (!subscriber.isUnsubscribed()) {
-                subscriber.onNext("");
+              if(disposable != null && !disposable.isDisposed()) {
+                observer.onNext("");
               }
               return;
             }
@@ -166,14 +184,14 @@ public class BluetoothConnection {
               bArray[i] = buffer.get(i);
             }
 
-            if (!subscriber.isUnsubscribed()) {
-              subscriber.onNext(new String(bArray));
+            if(disposable != null && !disposable.isDisposed()) {
+              observer.onNext(new String(bArray));
             }
             buffer.clear();
           }
         };
       }
-    }).onBackpressureBuffer();
+    }).toFlowable(BackpressureStrategy.BUFFER);
   }
 
   /**

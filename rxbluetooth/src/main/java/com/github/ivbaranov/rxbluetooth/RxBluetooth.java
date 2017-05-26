@@ -35,524 +35,535 @@ import com.github.ivbaranov.rxbluetooth.exceptions.GetProfileProxyException;
 import java.io.IOException;
 import java.util.Set;
 import java.util.UUID;
-import rx.Observable;
-import rx.Scheduler;
-import rx.Subscriber;
-import rx.Subscription;
-import rx.android.schedulers.AndroidSchedulers;
-import rx.functions.Action0;
-import rx.functions.Func0;
-import rx.subscriptions.Subscriptions;
+import java.util.concurrent.Callable;
+
+import io.reactivex.Observable;
+import io.reactivex.ObservableEmitter;
+import io.reactivex.ObservableOnSubscribe;
+import io.reactivex.ObservableSource;
+import io.reactivex.Scheduler;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.annotations.NonNull;
+import io.reactivex.functions.Action;
+import io.reactivex.functions.Cancellable;
 
 /**
  * Enables clients to listen to bluetooth events using RxJava Observables.
  */
 public class RxBluetooth {
-  private BluetoothAdapter mBluetoothAdapter;
-  private Context context;
+    private BluetoothAdapter mBluetoothAdapter;
+    private Context context;
 
-  public RxBluetooth(Context context) {
-    this.mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
-    this.context = context;
-  }
-
-  /**
-   * Return true if Bluetooth is available.
-   *
-   * @return true if mBluetoothAdapter is not null or it's address is empty, otherwise Bluetooth is
-   * not supported on this hardware platform
-   */
-  public boolean isBluetoothAvailable() {
-    return !(mBluetoothAdapter == null || TextUtils.isEmpty(mBluetoothAdapter.getAddress()));
-  }
-
-  /**
-   * Return true if Bluetooth is currently enabled and ready for use.
-   * <p>Equivalent to:
-   * <code>getBluetoothState() == STATE_ON</code>
-   * <p>Requires {@link android.Manifest.permission#BLUETOOTH}
-   *
-   * @return true if the local adapter is turned on
-   */
-  public boolean isBluetoothEnabled() {
-    return mBluetoothAdapter.isEnabled();
-  }
-
-  /**
-   * This will issue a request to enable Bluetooth through the system settings (without stopping
-   * your application) via ACTION_REQUEST_ENABLE action Intent.
-   *
-   * @param activity Activity
-   * @param requestCode request code
-   */
-  public void enableBluetooth(Activity activity, int requestCode) {
-    if (!mBluetoothAdapter.isEnabled()) {
-      Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
-      activity.startActivityForResult(enableBtIntent, requestCode);
+    public RxBluetooth(Context context) {
+        this.mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+        this.context = context;
     }
-  }
 
-  /**
-   * Return the set of {@link BluetoothDevice} objects that are bonded
-   * (paired) to the local adapter.
-   * <p>If Bluetooth state is not {@link BluetoothAdapter#STATE_ON}, this API
-   * will return an empty set. After turning on Bluetooth,
-   * wait for {@link BluetoothAdapter#ACTION_STATE_CHANGED} with {@link BluetoothAdapter#STATE_ON}
-   * to get the updated value.
-   * <p>Requires {@link android.Manifest.permission#BLUETOOTH}.
-   *
-   * @return unmodifiable set of {@link BluetoothDevice}, or null on error
-   */
-  public Set<BluetoothDevice> getBondedDevices() {
-    return mBluetoothAdapter.getBondedDevices();
-  }
-
-  /**
-   * Start the remote device discovery process.
-   *
-   * @return true on success, false on error
-   */
-  public boolean startDiscovery() {
-    return mBluetoothAdapter.startDiscovery();
-  }
-
-  /**
-   * Return true if the local Bluetooth adapter is currently in the device
-   * discovery process.
-   *
-   * @return true if discovering
-   */
-  public boolean isDiscovering() {
-    return mBluetoothAdapter.isDiscovering();
-  }
-
-  /**
-   * Cancel the current device discovery process.
-   *
-   * @return true on success, false on error
-   */
-  public boolean cancelDiscovery() {
-    return mBluetoothAdapter.cancelDiscovery();
-  }
-
-  /**
-   * This will issue a request to make the local device discoverable to other devices. By default,
-   * the device will become discoverable for 120 seconds.
-   *
-   * @param activity Activity
-   * @param requestCode request code
-   */
-  public void enableDiscoverability(Activity activity, int requestCode) {
-    enableDiscoverability(activity, requestCode, -1);
-  }
-
-  /**
-   * This will issue a request to make the local device discoverable to other devices. By default,
-   * the device will become discoverable for 120 seconds.  Maximum duration is capped at 300
-   * seconds.
-   *
-   * @param activity Activity
-   * @param requestCode request code
-   * @param duration discoverability duration in seconds
-   */
-  public void enableDiscoverability(Activity activity, int requestCode, int duration) {
-    Intent discoverableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
-    if (duration >= 0) {
-      discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, duration);
+    /**
+     * Return true if Bluetooth is available.
+     *
+     * @return true if mBluetoothAdapter is not null or it's address is empty, otherwise Bluetooth is
+     * not supported on this hardware platform
+     */
+    public boolean isBluetoothAvailable() {
+        return !(mBluetoothAdapter == null || TextUtils.isEmpty(mBluetoothAdapter.getAddress()));
     }
-    activity.startActivityForResult(discoverableIntent, requestCode);
-  }
 
-  /**
-   * Observes Bluetooth devices found while discovering.
-   *
-   * @return RxJava Observable with BluetoothDevice found
-   */
-  public Observable<BluetoothDevice> observeDevices() {
-    final IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
+    /**
+     * Return true if Bluetooth is currently enabled and ready for use.
+     * <p>Equivalent to:
+     * <code>getBluetoothState() == STATE_ON</code>
+     * <p>Requires {@link android.Manifest.permission#BLUETOOTH}
+     *
+     * @return true if the local adapter is turned on
+     */
+    public boolean isBluetoothEnabled() {
+        return mBluetoothAdapter.isEnabled();
+    }
 
-    return Observable.defer(new Func0<Observable<BluetoothDevice>>() {
-
-      @Override public Observable<BluetoothDevice> call() {
-        return Observable.create(new Observable.OnSubscribe<BluetoothDevice>() {
-
-          @Override public void call(final Subscriber<? super BluetoothDevice> subscriber) {
-            final BroadcastReceiver receiver = new BroadcastReceiver() {
-              @Override public void onReceive(Context context, Intent intent) {
-                String action = intent.getAction();
-                if (action.equals(BluetoothDevice.ACTION_FOUND)) {
-                  BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-                  subscriber.onNext(device);
-                }
-              }
-            };
-
-            context.registerReceiver(receiver, filter);
-
-            subscriber.add(unsubscribeInUiThread(new Action0() {
-              @Override public void call() {
-                context.unregisterReceiver(receiver);
-              }
-            }));
-          }
-        });
-      }
-    });
-  }
-
-  /**
-   * Observes DiscoveryState, which can be ACTION_DISCOVERY_STARTED or ACTION_DISCOVERY_FINISHED
-   * from {@link BluetoothAdapter}.
-   *
-   * @return RxJava Observable with DiscoveryState
-   */
-  public Observable<String> observeDiscovery() {
-    final IntentFilter filter = new IntentFilter();
-    filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED);
-    filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
-
-    return Observable.defer(new Func0<Observable<String>>() {
-
-      @Override public Observable<String> call() {
-        return Observable.create(new Observable.OnSubscribe<String>() {
-
-          @Override public void call(final Subscriber<? super String> subscriber) {
-            final BroadcastReceiver receiver = new BroadcastReceiver() {
-              @Override public void onReceive(Context context, Intent intent) {
-                subscriber.onNext(intent.getAction());
-              }
-            };
-
-            context.registerReceiver(receiver, filter);
-
-            subscriber.add(unsubscribeInUiThread(new Action0() {
-              @Override public void call() {
-                context.unregisterReceiver(receiver);
-              }
-            }));
-          }
-        });
-      }
-    });
-  }
-
-  /**
-   * Observes BluetoothState. Possible values are:
-   * {@link BluetoothAdapter#STATE_OFF},
-   * {@link BluetoothAdapter#STATE_TURNING_ON},
-   * {@link BluetoothAdapter#STATE_ON},
-   * {@link BluetoothAdapter#STATE_TURNING_OFF},
-   *
-   * @return RxJava Observable with BluetoothState
-   */
-  public Observable<Integer> observeBluetoothState() {
-    final IntentFilter filter = new IntentFilter();
-    filter.addAction(BluetoothAdapter.ACTION_STATE_CHANGED);
-
-    return Observable.defer(new Func0<Observable<Integer>>() {
-      @Override public Observable<Integer> call() {
-
-        return Observable.create(new Observable.OnSubscribe<Integer>() {
-
-          @Override public void call(final Subscriber<? super Integer> subscriber) {
-            final BroadcastReceiver receiver = new BroadcastReceiver() {
-              @Override public void onReceive(Context context, Intent intent) {
-                subscriber.onNext(mBluetoothAdapter.getState());
-              }
-            };
-
-            context.registerReceiver(receiver, filter);
-
-            subscriber.add(unsubscribeInUiThread(new Action0() {
-              @Override public void call() {
-                context.unregisterReceiver(receiver);
-              }
-            }));
-          }
-        });
-      }
-    });
-  }
-
-  /**
-   * Observes scan mode of device. Possible values are:
-   * {@link BluetoothAdapter#SCAN_MODE_NONE},
-   * {@link BluetoothAdapter#SCAN_MODE_CONNECTABLE},
-   * {@link BluetoothAdapter#SCAN_MODE_CONNECTABLE_DISCOVERABLE}
-   *
-   * @return RxJava Observable with scan mode
-   */
-  public Observable<Integer> observeScanMode() {
-    final IntentFilter filter = new IntentFilter();
-    filter.addAction(BluetoothAdapter.ACTION_SCAN_MODE_CHANGED);
-
-    return Observable.defer(new Func0<Observable<Integer>>() {
-      @Override public Observable<Integer> call() {
-
-        return Observable.create(new Observable.OnSubscribe<Integer>() {
-
-          @Override public void call(final Subscriber<? super Integer> subscriber) {
-            final BroadcastReceiver receiver = new BroadcastReceiver() {
-              @Override public void onReceive(Context context, Intent intent) {
-                subscriber.onNext(mBluetoothAdapter.getScanMode());
-              }
-            };
-
-            context.registerReceiver(receiver, filter);
-
-            subscriber.add(unsubscribeInUiThread(new Action0() {
-              @Override public void call() {
-                context.unregisterReceiver(receiver);
-              }
-            }));
-          }
-        });
-      }
-    });
-  }
-
-  /**
-   * Observes connection to specified profile. See also {@link BluetoothProfile.ServiceListener}.
-   *
-   * @param bluetoothProfile bluetooth profile to connect to. Can be either {@link
-   * BluetoothProfile#HEALTH},{@link BluetoothProfile#HEADSET}, {@link BluetoothProfile#A2DP},
-   * {@link BluetoothProfile#GATT} or {@link BluetoothProfile#GATT_SERVER}.
-   * @return RxJava Observable with {@link ServiceEvent}
-   */
-  public Observable<ServiceEvent> observeBluetoothProfile(final int bluetoothProfile) {
-    return Observable.defer(new Func0<Observable<ServiceEvent>>() {
-      @Override public Observable<ServiceEvent> call() {
-        return Observable.create(new Observable.OnSubscribe<ServiceEvent>() {
-          @Override public void call(final Subscriber<? super ServiceEvent> subscriber) {
-            if (!mBluetoothAdapter.getProfileProxy(context, new BluetoothProfile.ServiceListener() {
-              @Override public void onServiceConnected(int profile, BluetoothProfile proxy) {
-                subscriber.onNext(new ServiceEvent(ServiceEvent.State.CONNECTED, profile, proxy));
-              }
-
-              @Override public void onServiceDisconnected(int profile) {
-                subscriber.onNext(new ServiceEvent(ServiceEvent.State.DISCONNECTED, profile, null));
-              }
-            }, bluetoothProfile)) {
-              subscriber.onError(new GetProfileProxyException());
-            }
-          }
-        });
-      }
-    });
-  }
-
-  /**
-   * Close the connection of the profile proxy to the Service.
-   *
-   * <p> Clients should call this when they are no longer using the proxy obtained from {@link
-   * #observeBluetoothProfile}.
-   * <p>Profile can be one of {@link BluetoothProfile#HEALTH},{@link BluetoothProfile#HEADSET},
-   * {@link BluetoothProfile#A2DP}, {@link BluetoothProfile#GATT} or {@link
-   * BluetoothProfile#GATT_SERVER}.
-   *
-   * @param profile the Bluetooth profile
-   * @param proxy profile proxy object
-   */
-  public void closeProfileProxy(int profile, BluetoothProfile proxy) {
-    mBluetoothAdapter.closeProfileProxy(profile, proxy);
-  }
-
-  /**
-   * Observes connection state of devices.
-   *
-   * @return RxJava Observable with {@link ConnectionStateEvent}
-   */
-  public Observable<ConnectionStateEvent> observeConnectionState() {
-    final IntentFilter filter = new IntentFilter();
-    filter.addAction(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED);
-
-    return Observable.defer(new Func0<Observable<ConnectionStateEvent>>() {
-      @Override public Observable<ConnectionStateEvent> call() {
-
-        return Observable.create(new Observable.OnSubscribe<ConnectionStateEvent>() {
-
-          @Override public void call(final Subscriber<? super ConnectionStateEvent> subscriber) {
-            final BroadcastReceiver receiver = new BroadcastReceiver() {
-              @Override public void onReceive(Context context, Intent intent) {
-                int status = intent.getIntExtra(BluetoothAdapter.EXTRA_CONNECTION_STATE,
-                    BluetoothAdapter.STATE_DISCONNECTED);
-                int previousStatus =
-                    intent.getIntExtra(BluetoothAdapter.EXTRA_PREVIOUS_CONNECTION_STATE,
-                        BluetoothAdapter.STATE_DISCONNECTED);
-                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-
-                subscriber.onNext(new ConnectionStateEvent(status, previousStatus, device));
-              }
-            };
-
-            context.registerReceiver(receiver, filter);
-
-            subscriber.add(unsubscribeInUiThread(new Action0() {
-              @Override public void call() {
-                context.unregisterReceiver(receiver);
-              }
-            }));
-          }
-        });
-      }
-    });
-  }
-
-  /**
-   * Observes bond state of devices.
-   *
-   * @return RxJava Observable with {@link BondStateEvent}
-   */
-  public Observable<BondStateEvent> observeBondState() {
-    final IntentFilter filter = new IntentFilter();
-    filter.addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
-
-    return Observable.defer(new Func0<Observable<BondStateEvent>>() {
-      @Override public Observable<BondStateEvent> call() {
-
-        return Observable.create(new Observable.OnSubscribe<BondStateEvent>() {
-
-          @Override public void call(final Subscriber<? super BondStateEvent> subscriber) {
-            final BroadcastReceiver receiver = new BroadcastReceiver() {
-              @Override public void onReceive(Context context, Intent intent) {
-                int state =
-                    intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE);
-                int previousState = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE,
-                    BluetoothDevice.BOND_NONE);
-                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-
-                subscriber.onNext(new BondStateEvent(state, previousState, device));
-              }
-            };
-
-            context.registerReceiver(receiver, filter);
-
-            subscriber.add(unsubscribeInUiThread(new Action0() {
-              @Override public void call() {
-                context.unregisterReceiver(receiver);
-              }
-            }));
-          }
-        });
-      }
-    });
-  }
-
-  /**
-   * Opens {@link BluetoothServerSocket}, listens for a single connection request, releases socket
-   * and returns a connected {@link BluetoothSocket} on successful connection. Notifies observers
-   * with {@link IOException} {@code onError()}.
-   *
-   * @param name service name for SDP record
-   * @param uuid uuid for SDP record
-   * @return observable with connected {@link BluetoothSocket} on successful connection
-   */
-  public Observable<BluetoothSocket> observeBluetoothSocket(final String name, final UUID uuid) {
-    return Observable.defer(new Func0<Observable<BluetoothSocket>>() {
-      @Override public Observable<BluetoothSocket> call() {
-        return Observable.create(new Observable.OnSubscribe<BluetoothSocket>() {
-          @Override public void call(Subscriber<? super BluetoothSocket> subscriber) {
-            try {
-              BluetoothServerSocket bluetoothServerSocket =
-                  mBluetoothAdapter.listenUsingRfcommWithServiceRecord(name, uuid);
-              subscriber.onNext(bluetoothServerSocket.accept());
-              bluetoothServerSocket.close();
-            } catch (IOException e) {
-              subscriber.onError(e);
-            }
-          }
-        });
-      }
-    });
-  }
-
-  /**
-   * Create connection to {@link BluetoothDevice} and returns a connected {@link BluetoothSocket}
-   * on successful connection. Notifies observers with {@link IOException} {@code onError()}.
-   *
-   * @param bluetoothDevice bluetooth device to connect
-   * @param uuid uuid for SDP record
-   * @return observable with connected {@link BluetoothSocket} on successful connection
-   */
-  public Observable<BluetoothSocket> observeConnectDevice(final BluetoothDevice bluetoothDevice,
-      final UUID uuid) {
-    return Observable.defer(new Func0<Observable<BluetoothSocket>>() {
-      @Override public Observable<BluetoothSocket> call() {
-        return Observable.create(new Observable.OnSubscribe<BluetoothSocket>() {
-          @Override public void call(Subscriber<? super BluetoothSocket> subscriber) {
-            try {
-              BluetoothSocket bluetoothSocket =
-                  bluetoothDevice.createRfcommSocketToServiceRecord(uuid);
-              bluetoothSocket.connect();
-              subscriber.onNext(bluetoothSocket);
-            } catch (IOException e) {
-              subscriber.onError(e);
-            }
-          }
-        });
-      }
-    });
-  }
-
-  /**
-   * Observes ACL broadcast actions from {@link BluetoothDevice}. Possible broadcast ACL action
-   * values are:
-   * {@link BluetoothDevice#ACTION_ACL_CONNECTED},
-   * {@link BluetoothDevice#ACTION_ACL_DISCONNECT_REQUESTED},
-   * {@link BluetoothDevice#ACTION_ACL_DISCONNECTED}
-   *
-   * @return RxJava Observable with {@link AclEvent}
-   */
-  public Observable<AclEvent> observeAclEvent() {
-    final IntentFilter filter = new IntentFilter();
-    filter.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
-    filter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
-    filter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECT_REQUESTED);
-
-    return Observable.defer(new Func0<Observable<AclEvent>>() {
-      @Override public Observable<AclEvent> call() {
-
-        return Observable.create(new Observable.OnSubscribe<AclEvent>() {
-
-          @Override public void call(final Subscriber<? super AclEvent> subscriber) {
-            final BroadcastReceiver receiver = new BroadcastReceiver() {
-              @Override public void onReceive(Context context, Intent intent) {
-                String action = intent.getAction();
-                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-
-                subscriber.onNext(new AclEvent(action, device));
-              }
-            };
-
-            context.registerReceiver(receiver, filter);
-
-            subscriber.add(unsubscribeInUiThread(new Action0() {
-              @Override public void call() {
-                context.unregisterReceiver(receiver);
-              }
-            }));
-          }
-        });
-      }
-    });
-  }
-
-  private Subscription unsubscribeInUiThread(final Action0 unsubscribe) {
-    return Subscriptions.create(new Action0() {
-
-      @Override public void call() {
-        if (Looper.getMainLooper() == Looper.myLooper()) {
-          unsubscribe.call();
-        } else {
-          final Scheduler.Worker inner = AndroidSchedulers.mainThread().createWorker();
-          inner.schedule(new Action0() {
-            @Override public void call() {
-              unsubscribe.call();
-              inner.unsubscribe();
-            }
-          });
+    /**
+     * This will issue a request to enable Bluetooth through the system settings (without stopping
+     * your application) via ACTION_REQUEST_ENABLE action Intent.
+     *
+     * @param activity Activity
+     * @param requestCode request code
+     */
+    public void enableBluetooth(Activity activity, int requestCode) {
+        if (!mBluetoothAdapter.isEnabled()) {
+            Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+            activity.startActivityForResult(enableBtIntent, requestCode);
         }
-      }
-    });
-  }
+    }
+
+    /**
+     * Return the set of {@link BluetoothDevice} objects that are bonded
+     * (paired) to the local adapter.
+     * <p>If Bluetooth state is not {@link BluetoothAdapter#STATE_ON}, this API
+     * will return an empty set. After turning on Bluetooth,
+     * wait for {@link BluetoothAdapter#ACTION_STATE_CHANGED} with {@link BluetoothAdapter#STATE_ON}
+     * to get the updated value.
+     * <p>Requires {@link android.Manifest.permission#BLUETOOTH}.
+     *
+     * @return unmodifiable set of {@link BluetoothDevice}, or null on error
+     */
+    public Set<BluetoothDevice> getBondedDevices() {
+        return mBluetoothAdapter.getBondedDevices();
+    }
+
+    /**
+     * Start the remote device discovery process.
+     *
+     * @return true on success, false on error
+     */
+    public boolean startDiscovery() {
+        return mBluetoothAdapter.startDiscovery();
+    }
+
+    /**
+     * Return true if the local Bluetooth adapter is currently in the device
+     * discovery process.
+     *
+     * @return true if discovering
+     */
+    public boolean isDiscovering() {
+        return mBluetoothAdapter.isDiscovering();
+    }
+
+    /**
+     * Cancel the current device discovery process.
+     *
+     * @return true on success, false on error
+     */
+    public boolean cancelDiscovery() {
+        return mBluetoothAdapter.cancelDiscovery();
+    }
+
+    /**
+     * This will issue a request to make the local device discoverable to other devices. By default,
+     * the device will become discoverable for 120 seconds.
+     *
+     * @param activity Activity
+     * @param requestCode request code
+     */
+    public void enableDiscoverability(Activity activity, int requestCode) {
+        enableDiscoverability(activity, requestCode, -1);
+    }
+
+    /**
+     * This will issue a request to make the local device discoverable to other devices. By default,
+     * the device will become discoverable for 120 seconds.  Maximum duration is capped at 300
+     * seconds.
+     *
+     * @param activity Activity
+     * @param requestCode request code
+     * @param duration discoverability duration in seconds
+     */
+    public void enableDiscoverability(Activity activity, int requestCode, int duration) {
+        Intent discoverableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
+        if (duration >= 0) {
+            discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, duration);
+        }
+        activity.startActivityForResult(discoverableIntent, requestCode);
+    }
+
+    /**
+     * Observes Bluetooth devices found while discovering.
+     *
+     * @return RxJava Observable with BluetoothDevice found
+     */
+    public Observable<BluetoothDevice> observeDevices() {
+        final IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
+
+        return Observable.defer(new Callable<ObservableSource<? extends BluetoothDevice>>() {
+
+            @Override public Observable<BluetoothDevice> call() {
+                return Observable.create(new ObservableOnSubscribe<BluetoothDevice>() {
+                    @Override
+                    public void subscribe(final ObservableEmitter<BluetoothDevice> subscriber) throws Exception {
+                        final BroadcastReceiver receiver = new BroadcastReceiver() {
+                            @Override public void onReceive(Context context, Intent intent) {
+                                String action = intent.getAction();
+                                if (action.equals(BluetoothDevice.ACTION_FOUND)) {
+                                    BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                                    subscriber.onNext(device);
+                                }
+                            }
+                        };
+
+                        context.registerReceiver(receiver, filter);
+
+                        subscriber.setCancellable(unsubscribeInUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                context.unregisterReceiver(receiver);
+                            }
+                        }));
+                    }
+                });
+            }
+        });
+    }
+
+    /**
+     * Observes DiscoveryState, which can be ACTION_DISCOVERY_STARTED or ACTION_DISCOVERY_FINISHED
+     * from {@link BluetoothAdapter}.
+     *
+     * @return RxJava Observable with DiscoveryState
+     */
+    public Observable<String> observeDiscovery() {
+        final IntentFilter filter = new IntentFilter();
+        filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED);
+        filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
+
+        return Observable.defer(new Callable<Observable<String>>() {
+
+            @Override public Observable<String> call() {
+                return Observable.create(new ObservableOnSubscribe<String>() {
+
+                    @Override public void subscribe(final ObservableEmitter<String> subscriber) throws Exception {
+                        final BroadcastReceiver receiver = new BroadcastReceiver() {
+                            @Override public void onReceive(Context context, Intent intent) {
+                                subscriber.onNext(intent.getAction());
+                            }
+                        };
+
+                        context.registerReceiver(receiver, filter);
+
+                        subscriber.setCancellable(unsubscribeInUiThread(new Runnable() {
+                            @Override public void run() {
+                                context.unregisterReceiver(receiver);
+                            }
+                        }));
+                    }
+                });
+            }
+        });
+    }
+
+    /**
+     * Observes BluetoothState. Possible values are:
+     * {@link BluetoothAdapter#STATE_OFF},
+     * {@link BluetoothAdapter#STATE_TURNING_ON},
+     * {@link BluetoothAdapter#STATE_ON},
+     * {@link BluetoothAdapter#STATE_TURNING_OFF},
+     *
+     * @return RxJava Observable with BluetoothState
+     */
+    public Observable<Integer> observeBluetoothState() {
+        final IntentFilter filter = new IntentFilter();
+        filter.addAction(BluetoothAdapter.ACTION_STATE_CHANGED);
+
+        return Observable.defer(new Callable<Observable<Integer>>() {
+            @Override public Observable<Integer> call() {
+
+                return Observable.create(new ObservableOnSubscribe<Integer>() {
+
+                    @Override public void subscribe(final ObservableEmitter<Integer> subscriber) throws Exception {
+                        final BroadcastReceiver receiver = new BroadcastReceiver() {
+                            @Override public void onReceive(Context context, Intent intent) {
+                                subscriber.onNext(mBluetoothAdapter.getState());
+                            }
+                        };
+
+                        context.registerReceiver(receiver, filter);
+
+                        subscriber.setCancellable(unsubscribeInUiThread(new Runnable() {
+                            @Override public void run() {
+                                context.unregisterReceiver(receiver);
+                            }
+                        }));
+                    }
+                });
+            }
+        });
+    }
+
+    /**
+     * Observes scan mode of device. Possible values are:
+     * {@link BluetoothAdapter#SCAN_MODE_NONE},
+     * {@link BluetoothAdapter#SCAN_MODE_CONNECTABLE},
+     * {@link BluetoothAdapter#SCAN_MODE_CONNECTABLE_DISCOVERABLE}
+     *
+     * @return RxJava Observable with scan mode
+     */
+    public Observable<Integer> observeScanMode() {
+        final IntentFilter filter = new IntentFilter();
+        filter.addAction(BluetoothAdapter.ACTION_SCAN_MODE_CHANGED);
+
+        return Observable.defer(new Callable<Observable<Integer>>() {
+            @Override public Observable<Integer> call() {
+
+                return Observable.create(new ObservableOnSubscribe<Integer>() {
+
+                    @Override
+                    public void subscribe(final @NonNull ObservableEmitter<Integer> subscriber) throws Exception {
+                        final BroadcastReceiver receiver = new BroadcastReceiver() {
+                            @Override public void onReceive(Context context, Intent intent) {
+                                subscriber.onNext(mBluetoothAdapter.getScanMode());
+                            }
+                        };
+
+                        context.registerReceiver(receiver, filter);
+
+                        subscriber.setCancellable(unsubscribeInUiThread(new Runnable() {
+                            @Override public void run() {
+                                context.unregisterReceiver(receiver);
+                            }
+                        }));
+                    }
+                });
+            }
+        });
+    }
+
+    /**
+     * Observes connection to specified profile. See also {@link BluetoothProfile.ServiceListener}.
+     *
+     * @param bluetoothProfile bluetooth profile to connect to. Can be either {@link
+     * BluetoothProfile#HEALTH},{@link BluetoothProfile#HEADSET}, {@link BluetoothProfile#A2DP},
+     * {@link BluetoothProfile#GATT} or {@link BluetoothProfile#GATT_SERVER}.
+     * @return RxJava Observable with {@link ServiceEvent}
+     */
+    public Observable<ServiceEvent> observeBluetoothProfile(final int bluetoothProfile) {
+        return Observable.defer(new Callable<Observable<ServiceEvent>>() {
+            @Override public Observable<ServiceEvent> call() {
+                return Observable.create(new ObservableOnSubscribe<ServiceEvent>() {
+                    @Override
+                    public void subscribe(final @NonNull ObservableEmitter<ServiceEvent> subscriber) throws Exception {
+                        if (!mBluetoothAdapter.getProfileProxy(context, new BluetoothProfile.ServiceListener() {
+                            @Override public void onServiceConnected(int profile, BluetoothProfile proxy) {
+                                subscriber.onNext(new ServiceEvent(ServiceEvent.State.CONNECTED, profile, proxy));
+                            }
+
+                            @Override public void onServiceDisconnected(int profile) {
+                                subscriber.onNext(new ServiceEvent(ServiceEvent.State.DISCONNECTED, profile, null));
+                            }
+                        }, bluetoothProfile)) {
+                            subscriber.onError(new GetProfileProxyException());
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    /**
+     * Close the connection of the profile proxy to the Service.
+     *
+     * <p> Clients should call this when they are no longer using the proxy obtained from {@link
+     * #observeBluetoothProfile}.
+     * <p>Profile can be one of {@link BluetoothProfile#HEALTH},{@link BluetoothProfile#HEADSET},
+     * {@link BluetoothProfile#A2DP}, {@link BluetoothProfile#GATT} or {@link
+     * BluetoothProfile#GATT_SERVER}.
+     *
+     * @param profile the Bluetooth profile
+     * @param proxy profile proxy object
+     */
+    public void closeProfileProxy(int profile, BluetoothProfile proxy) {
+        mBluetoothAdapter.closeProfileProxy(profile, proxy);
+    }
+
+    /**
+     * Observes connection state of devices.
+     *
+     * @return RxJava Observable with {@link ConnectionStateEvent}
+     */
+    public Observable<ConnectionStateEvent> observeConnectionState() {
+        final IntentFilter filter = new IntentFilter();
+        filter.addAction(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED);
+
+        return Observable.defer(new Callable<Observable<ConnectionStateEvent>>() {
+            @Override public Observable<ConnectionStateEvent> call() {
+
+                return Observable.create(new ObservableOnSubscribe<ConnectionStateEvent>() {
+
+                    @Override
+                    public void subscribe(final @NonNull ObservableEmitter<ConnectionStateEvent> subscriber) throws Exception {
+                        final BroadcastReceiver receiver = new BroadcastReceiver() {
+                            @Override public void onReceive(Context context, Intent intent) {
+                                int status = intent.getIntExtra(BluetoothAdapter.EXTRA_CONNECTION_STATE,
+                                        BluetoothAdapter.STATE_DISCONNECTED);
+                                int previousStatus =
+                                        intent.getIntExtra(BluetoothAdapter.EXTRA_PREVIOUS_CONNECTION_STATE,
+                                                BluetoothAdapter.STATE_DISCONNECTED);
+                                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+
+                                subscriber.onNext(new ConnectionStateEvent(status, previousStatus, device));
+                            }
+                        };
+
+                        context.registerReceiver(receiver, filter);
+
+                        subscriber.setCancellable(unsubscribeInUiThread(new Runnable() {
+                            @Override public void run() {
+                                context.unregisterReceiver(receiver);
+                            }
+                        }));
+                    }
+                });
+            }
+        });
+    }
+
+    /**
+     * Observes bond state of devices.
+     *
+     * @return RxJava Observable with {@link BondStateEvent}
+     */
+    public Observable<BondStateEvent> observeBondState() {
+        final IntentFilter filter = new IntentFilter();
+        filter.addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
+
+        return Observable.defer(new Callable<Observable<BondStateEvent>>() {
+            @Override public Observable<BondStateEvent> call() {
+
+                return Observable.create(new ObservableOnSubscribe<BondStateEvent>() {
+
+                    @Override
+                    public void subscribe(final @NonNull ObservableEmitter<BondStateEvent> subscriber) throws Exception {
+                        final BroadcastReceiver receiver = new BroadcastReceiver() {
+                            @Override public void onReceive(Context context, Intent intent) {
+                                int state =
+                                        intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE);
+                                int previousState = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE,
+                                        BluetoothDevice.BOND_NONE);
+                                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+
+                                subscriber.onNext(new BondStateEvent(state, previousState, device));
+                            }
+                        };
+
+                        context.registerReceiver(receiver, filter);
+
+                        subscriber.setCancellable(unsubscribeInUiThread(new Runnable() {
+                            @Override public void run() {
+                                context.unregisterReceiver(receiver);
+                            }
+                        }));
+                    }
+                });
+            }
+        });
+    }
+
+    /**
+     * Opens {@link BluetoothServerSocket}, listens for a single connection request, releases socket
+     * and returns a connected {@link BluetoothSocket} on successful connection. Notifies observers
+     * with {@link IOException} {@code onError()}.
+     *
+     * @param name service name for SDP record
+     * @param uuid uuid for SDP record
+     * @return observable with connected {@link BluetoothSocket} on successful connection
+     */
+    public Observable<BluetoothSocket> observeBluetoothSocket(final String name, final UUID uuid) {
+        return Observable.defer(new Callable<Observable<BluetoothSocket>>() {
+            @Override public Observable<BluetoothSocket> call() {
+                return Observable.create(new ObservableOnSubscribe<BluetoothSocket>() {
+                    @Override
+                    public void subscribe(@NonNull ObservableEmitter<BluetoothSocket> subscriber) throws Exception {
+                        try {
+                            BluetoothServerSocket bluetoothServerSocket =
+                                    mBluetoothAdapter.listenUsingRfcommWithServiceRecord(name, uuid);
+                            subscriber.onNext(bluetoothServerSocket.accept());
+                            bluetoothServerSocket.close();
+                        } catch (IOException e) {
+                            subscriber.onError(e);
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    /**
+     * Create connection to {@link BluetoothDevice} and returns a connected {@link BluetoothSocket}
+     * on successful connection. Notifies observers with {@link IOException} {@code onError()}.
+     *
+     * @param bluetoothDevice bluetooth device to connect
+     * @param uuid uuid for SDP record
+     * @return observable with connected {@link BluetoothSocket} on successful connection
+     */
+    public Observable<BluetoothSocket> observeConnectDevice(final BluetoothDevice bluetoothDevice,
+                                                            final UUID uuid) {
+        return Observable.defer(new Callable<Observable<BluetoothSocket>>() {
+            @Override public Observable<BluetoothSocket> call() {
+                return Observable.create(new ObservableOnSubscribe<BluetoothSocket>() {
+                    @Override
+                    public void subscribe(@NonNull ObservableEmitter<BluetoothSocket> subscriber) throws Exception {
+                        try {
+                            BluetoothSocket bluetoothSocket =
+                                    bluetoothDevice.createRfcommSocketToServiceRecord(uuid);
+                            bluetoothSocket.connect();
+                            subscriber.onNext(bluetoothSocket);
+                        } catch (IOException e) {
+                            subscriber.onError(e);
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    /**
+     * Observes ACL broadcast actions from {@link BluetoothDevice}. Possible broadcast ACL action
+     * values are:
+     * {@link BluetoothDevice#ACTION_ACL_CONNECTED},
+     * {@link BluetoothDevice#ACTION_ACL_DISCONNECT_REQUESTED},
+     * {@link BluetoothDevice#ACTION_ACL_DISCONNECTED}
+     *
+     * @return RxJava Observable with {@link AclEvent}
+     */
+    public Observable<AclEvent> observeAclEvent() {
+        final IntentFilter filter = new IntentFilter();
+        filter.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
+        filter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
+        filter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECT_REQUESTED);
+
+        return Observable.defer(new Callable<Observable<AclEvent>>() {
+            @Override public Observable<AclEvent> call() {
+
+                return Observable.create(new ObservableOnSubscribe<AclEvent>() {
+
+                    @Override
+                    public void subscribe(final @NonNull ObservableEmitter<AclEvent> subscriber) throws Exception {
+                        final BroadcastReceiver receiver = new BroadcastReceiver() {
+                            @Override public void onReceive(Context context, Intent intent) {
+                                String action = intent.getAction();
+                                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+
+                                subscriber.onNext(new AclEvent(action, device));
+                            }
+                        };
+
+                        context.registerReceiver(receiver, filter);
+
+                        subscriber.setCancellable(unsubscribeInUiThread(new Runnable() {
+                            @Override public void run() {
+                                context.unregisterReceiver(receiver);
+                            }
+                        }));
+                    }
+                });
+            }
+        });
+    }
+
+    private Cancellable unsubscribeInUiThread(final Runnable unsubscribe) {
+        return new Cancellable() {
+            @Override
+            public void cancel() throws Exception {
+                if (Looper.getMainLooper() == Looper.myLooper()) {
+                    unsubscribe.run();
+                } else {
+                    final Scheduler.Worker inner = AndroidSchedulers.mainThread().createWorker();
+                    inner.schedule(new Runnable() {
+                        @Override
+                        public void run() {
+                            unsubscribe.run();
+                        }
+                    });
+                }
+            }
+        };
+    }
 }
